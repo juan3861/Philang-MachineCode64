@@ -245,7 +245,7 @@ class Devourer:
             'avg_entropy': round(sum(m.entropy for m in self.meals) / max(1, len(self.meals)), 4),
             'avg_phi': round(sum(m.phi_score for m in self.meals) / max(1, len(self.meals)), 4),
             'avg_compress': round(sum(m.compress_ratio for m in self.meals) / max(1, len(self.meals)), 2),
-            'top_patterns': dict(self._pattern_cache.most_common(10)),
+            'top_patterns': dict(sorted(self._pattern_cache.items(), key=lambda x: -x[1])[:10]),
         }
 
 # ══════════════════════════════════════════════════════════════════════════════
