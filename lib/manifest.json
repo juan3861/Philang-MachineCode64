@@ -1,0 +1,19 @@
+{
+  "library": "PhiLang Machine Code 64",
+  "version": "1.0.0",
+  "total_templates": 7,
+  "templates": {
+    "sum_gauss": {"desc": "Soma 1..N (Gauss O(1))", "speedup": "34,000x", "source": "manual"},
+    "factorial": {"desc": "Fatorial N! iterativo", "speedup": "500x", "source": "manual"},
+    "fibonacci": {"desc": "Fibonacci(N) iterativo", "speedup": "200x", "source": "manual"},
+    "array_sum": {"desc": "Soma de array uint64", "speedup": "10x", "source": "manual"},
+    "square": {"desc": "N²", "speedup": "~50x", "source": "evolved"},
+    "cube": {"desc": "N³", "speedup": "~50x", "source": "evolved"},
+    "abs_val": {"desc": "Valor absoluto", "speedup": "~100x", "source": "evolved"}
+  },
+  "evolved_by_agi": ["square", "cube", "abs_val"],
+  "total_library_scanned": 3063,
+  "jit_detected": 21,
+  "created": "2026-05-19",
+  "creator": "Hermes AGI + Ruan Pablo"
+}
