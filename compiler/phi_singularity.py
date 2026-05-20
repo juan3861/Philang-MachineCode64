@@ -302,97 +302,69 @@ class NeuralAssembler:
     _templates: Dict[str, bytes] = {}
     
     @staticmethod
-    def evolve_template(name: str, reference_fn: Callable, expected_size: int = 0) -> dict:
-        """Evolui um template de assembly via busca genética.
-        
-        Princípio: a ASI não escreve assembly manualmente —
-        ela EVOLVE o código como um organismo genético.
-        """
-        ops_pool = [
-            bytes([0x48]),  # REX.W prefix
-            bytes([0x89, 0xC8]),  # mov rax, rcx
-            bytes([0x31, 0xC0]),  # xor rax, rax
-            bytes([0xFF, 0xC0]),  # inc rax
-            bytes([0xFF, 0xC9]),  # dec rcx
-            bytes([0x0F, 0xAF, 0xC0]),  # imul rax, rax
-            bytes([0x0F, 0xAF, 0xC1]),  # imul rax, rcx
-            bytes([0xD1, 0xE8]),  # shr rax, 1
-            bytes([0xF7, 0xE1]),  # mul rcx
-            bytes([0xF7, 0xD8]),  # neg rax
-            bytes([0x85, 0xC9]),  # test rcx, rcx
-            bytes([0xC3]),  # ret
-            bytes([0x50]),  # push rax
-            bytes([0x58]),  # pop rax
-            bytes([0x59]),  # pop rcx
-            bytes([0x01, 0xC8]),  # add rax, rcx
-            bytes([0x29, 0xC8]),  # sub rax, rcx
-            bytes([0x83, 0xF9, 0x01]),  # cmp rcx, 1
-            bytes([0x83, 0xF9, 0x00]),  # cmp rcx, 0
+    def evolve_template(name: str, reference_fn: Callable, max_ops: int = 6) -> dict:
+        """Evolui um template de assembly via busca genética com sandbox."""
+        SAFE_OPS = [
+            bytes([0x48, 0x89, 0xC8]),  # mov rax, rcx
+            bytes([0x48, 0x31, 0xC0]),  # xor rax, rax
+            bytes([0x48, 0xFF, 0xC0]),  # inc rax
+            bytes([0x48, 0xFF, 0xC9]),  # dec rcx
+            bytes([0x48, 0x0F, 0xAF, 0xC0]),  # imul rax, rax
+            bytes([0x48, 0x0F, 0xAF, 0xC1]),  # imul rax, rcx
+            bytes([0x48, 0xD1, 0xE8]),  # shr rax, 1
+            bytes([0x48, 0xF7, 0xE1]),  # mul rcx
+            bytes([0x48, 0xF7, 0xD8]),  # neg rax
+            bytes([0x48, 0x01, 0xC8]),  # add rax, rcx
+            bytes([0x48, 0x29, 0xC8]),  # sub rax, rcx
+            bytes([0x48, 0x83, 0xE0, 0x00]),  # and rax, 0
         ]
+        # Estruturas condicionais seguras (jmp curto, sem salto aleatório)
+        # test rcx,rcx; jz +offset (offset fixo para ret)
+        SAFE_BRANCH = bytes([0x48, 0x85, 0xC9, 0x74, 0x02, 0xC3])  # test rcx,rcx; jz +2; ret
         
         k32 = ctypes.windll.kernel32
         k32.VirtualAlloc.restype = ctypes.c_void_p
         
         best_fitness = -1
-        best_code = None
-        best_result = None
+        best = None
         
-        for gen in range(200):
-            # Gera código aleatório
-            n_ops = np.random.randint(2, 8)
-            code = b''
-            for _ in range(n_ops):
-                op = ops_pool[np.random.randint(len(ops_pool))]
-                # Adiciona Jcc com offset aleatório
-                if op in [bytes([0x85, 0xC9]), bytes([0x83, 0xF9, 0x01]), bytes([0x83, 0xF9, 0x00])]:
-                    jcc_op = bytes([np.random.choice([0x74, 0x75, 0x79, 0x76])])  # jz, jnz, jns, jbe
-                    offset = np.random.randint(2, 24)
-                    code += op + jcc_op + bytes([offset])
-                else:
-                    code += op
-            
+        for gen in range(500):
+            n_ops = np.random.randint(1, max_ops + 1)
+            # Gera sequência linear (sem jumps, 100% segura)
+            ops_list = [SAFE_OPS[np.random.randint(len(SAFE_OPS))] for _ in range(n_ops)]
+            code = b''.join(ops_list)
             code += bytes([0xC3])  # ret
             
-            if len(code) < 4 or len(code) > 64:
+            if len(code) < 3 or len(code) > 64:
                 continue
             
-            # Aloca e testa
+            buf = k32.VirtualAlloc(0, len(code) + 16, 0x3000, 0x40)
+            if not buf:
+                continue
+            
             try:
-                buf = k32.VirtualAlloc(0, len(code) + 16, 0x3000, 0x40)
-                if not buf:
-                    continue
                 ctypes.memmove(buf, code, len(code))
-                
                 func = ctypes.WINFUNCTYPE(ctypes.c_uint64, ctypes.c_uint64)(buf)
                 
-                # Testa em 5 valores
                 fitness = 0
-                for test_val in [0, 1, 2, 5, 10]:
+                for tv in [0, 1, 2, 5, 10]:
                     try:
-                        result = func(test_val)
-                        ref = reference_fn(test_val)
-                        if result == ref:
-                            fitness += 1
-                        else:
-                            fitness -= 2
+                        result = func(tv)
+                        ref = reference_fn(tv)
+                        fitness += 1 if result == ref else -1
                     except:
                         fitness -= 10
                         break
                 
                 if fitness > best_fitness:
                     best_fitness = fitness
-                    best_code = code
-                    best_result = {'name': name, 'generation': gen, 'fitness': fitness, 'bytes': len(code), 'code_hex': code.hex()[:40]}
-                    
-                    if fitness >= 5:  # Todos os testes passaram
-                        break
+                    best = {'name': name, 'gen': gen, 'fitness': fitness, 'bytes': len(code), 'hex': code.hex()[:40]}
+                if fitness >= 5:
+                    break
             except:
                 pass
         
-        if best_code and best_fitness >= 4:
-            NeuralAssembler._templates[name] = best_code
-        
-        return best_result or {'name': name, 'fitness': best_fitness, 'message': 'failed to evolve'}
+        return best or {'name': name, 'fitness': best_fitness}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # §6  PREDICTIVE CACHE — Hash do AST → Machine Code
@@ -500,8 +472,8 @@ class SingularityEngine:
         def ref_cube(x): return x*x*x
         r1 = self.neural.evolve_template('square', ref_square)
         r2 = self.neural.evolve_template('cube', ref_cube)
-        report.append(f"║   square: gen={r1.get('generation','?')} | fit={r1.get('fitness','?')}/5 | {r1.get('bytes','?')}B │")
-        report.append(f"║   cube:   gen={r2.get('generation','?')} | fit={r2.get('fitness','?')}/5 | {r2.get('bytes','?')}B │")
+        report.append(f"║   square: gen={r1.get('gen','?')} | fit={r1.get('fitness','?')}/5 | {r1.get('bytes','?')}B │")
+        report.append(f"║   cube:   gen={r2.get('gen','?')} | fit={r2.get('fitness','?')}/5 | {r2.get('bytes','?')}B │")
         
         # §6 Predictive Cache
         report.append("║ §6 PREDICTIVE CACHE                                       ║")
