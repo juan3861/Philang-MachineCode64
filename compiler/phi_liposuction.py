@@ -160,7 +160,9 @@ class CompressionRatioFilter:
         return round(ratio, 2)
     
     @staticmethod
-    def verdict(ratio: float) -> Tuple[bool, str]:
+    def verdict(ratio: float, size_bytes: int = 0) -> Tuple[bool, str]:
+        if size_bytes < 100:
+            return True, f"minúsculo ({size_bytes}B) — neutro"  # pequeno demais pra julgar
         if ratio > 100:
             return True, f"já é essência ({ratio:.0f}x) — preservar"
         elif ratio > 5:
@@ -211,7 +213,10 @@ class UsageFrequencyFilter:
         return self._db.get(key, {'count': 0, 'last_seen': 0})
     
     @staticmethod
-    def verdict(count: int, last_seen_days: float) -> Tuple[bool, str]:
+    def verdict(count: int, last_seen_days: float, file_age_days: float = 0) -> Tuple[bool, str]:
+        # Arquivo NOVO (<7 dias) sem histórico → neutro (benefício da dúvida)
+        if count == 0 and file_age_days < 7:
+            return True, f"novo ({file_age_days:.0f}d) — benefício da dúvida"
         if count == 0:
             return False, "nunca acessado — candidato a descarte"
         elif count >= 10 and last_seen_days < 1:
@@ -233,11 +238,15 @@ class TemporalDecayFilter:
     HALF_LIFE_DAYS = 30  # após 30 dias sem uso, peso cai pela metade
     
     @staticmethod
-    def compute_weight(last_access_days: float) -> float:
-        """Peso = 2^(-t/half_life). 0 = hoje, 30d = 0.5, 90d = 0.125."""
+    def compute_weight(last_access_days: float, file_age_days: float = 0) -> float:
+        """Peso = 2^(-t/half_life). Arquivo novo sem acesso usa idade do arquivo."""
         if last_access_days < 0:
             return 1.0
-        return 2.0 ** (-last_access_days / TemporalDecayFilter.HALF_LIFE_DAYS)
+        # Se nunca acessado, usa idade do arquivo como referência
+        effective_age = last_access_days if last_access_days < 999 else file_age_days
+        if effective_age < 0:
+            return 1.0
+        return 2.0 ** (-effective_age / TemporalDecayFilter.HALF_LIFE_DAYS)
     
     @staticmethod
     def verdict(weight: float) -> Tuple[bool, str]:
@@ -347,16 +356,16 @@ class LiposuctionEngine:
         
         # Lei 3: Compressão
         cr = self.compression.compute_ratio(data)
-        c_pass, c_reason = self.compression.verdict(cr)
+        c_pass, c_reason = self.compression.verdict(cr, size)
         
         # Lei 4: Frequência de uso
         usage_stats = self.usage.get_stats(filepath)
         access_count = usage_stats['count']
         last_seen_days = (time.time() - usage_stats['last_seen']) / 86400 if usage_stats['last_seen'] else 999
-        u_pass, u_reason = self.usage.verdict(access_count, last_seen_days)
+        u_pass, u_reason = self.usage.verdict(access_count, last_seen_days, age_days)
         
         # Lei 5: Decaimento temporal
-        weight = self.decay.compute_weight(last_seen_days)
+        weight = self.decay.compute_weight(last_seen_days, age_days)
         d_pass, d_reason = self.decay.verdict(weight)
         
         # Lei 6: Pressão de disco
@@ -376,9 +385,10 @@ class LiposuctionEngine:
         # Pressão de disco modifica o threshold
         pressure_mult = self.disk.get_pressure_multiplier(free_gb)
         
-        # Threshold ajustado por pressão
-        threshold_keep = max(2, 4 - int(pressure_mult))  # 2-4 leis pra manter
-        threshold_discard = min(3, 1 + int(pressure_mult * 0.5))  # 1-3 leis pra descartar
+        # Threshold ajustado por pressão: mais pressão = mais leis pra preservar
+        # leniente (×0.5): precisa 2-3 leis | agressivo (×3.0): precisa 5-6 leis
+        threshold_keep = min(6, 2 + int(pressure_mult))  # 2.5-5.0 → 2-5 leis
+        threshold_discard = max(1, int(pressure_mult * 0.7))  # 0.35-2.1 → 1-2 leis
         
         if laws_passed >= threshold_keep:
             verdict = 'KEEP'
