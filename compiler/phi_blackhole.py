@@ -85,11 +85,11 @@ class BlackHoleBench:
         }
     
     def benchmark_all(self, n_calls: int = 10_000_000) -> list:
-        """Benchmark de TODOS os templates."""
+        """Benchmark de TODOS os templates (scalars apenas)."""
+        SCALAR_TEMPLATES = ['sum_gauss', 'factorial', 'fibonacci', 'square', 'cube', 'abs_val']
         results = []
-        for name in TEMPLATES:
-            args = {'array_sum': 10, 'dot_product': 10}.get(name, 100)
-            r = self.benchmark_single(name, n_calls=max(100000, n_calls//10), arg=args)
+        for name in SCALAR_TEMPLATES:
+            r = self.benchmark_single(name, n_calls=n_calls, arg=100)
             results.append(r)
         return results
     
